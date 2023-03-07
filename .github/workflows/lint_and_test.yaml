@@ -1,0 +1,80 @@
+name: Run lint and tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  lint_and_test:
+    runs-on: ubuntu-latest
+    env:
+      project-working-directory: ./
+
+    services:
+      postgres:
+        image: postgres:15.1
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_DB: backend
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11.2
+      - name: Install poetry
+        run: |
+          pip install poetry
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        env:
+          cache-name: cache-poetry-dependencies
+        with:
+          path: ${{ env.project-working-directory }}/.venv
+          key: ${{ runner.os }}-test-${{ env.cache-name }}-${{ hashFiles(format('{0}/poetry.lock', env.project-working-directory)) }}
+          restore-keys: |
+            ${{ runner.os }}-test-${{ env.cache-name }}-
+      - name: Install dependencies
+        working-directory: ${{ env.project-working-directory }}
+        run: |
+          poetry install --no-root
+      - name: Lint
+        working-directory: ${{ env.project-working-directory }}
+        run: |
+          # stop the build if there are Python syntax errors or undefined names
+          poetry run flake8 source tests --count --show-source --statistics
+      - name: Run mypy
+        working-directory: ${{ env.project-working-directory }}
+        run: |
+          poetry run mypy source
+      - name: Run tests
+        working-directory: ${{ env.project-working-directory }}
+        env:
+          DATABASE__URL: postgresql+asyncpg://user:password@localhost:5432/backend
+          TESTS__USE_TESTCONTAINERS: false
+        run: |
+          poetry run pytest --junitxml=junit/test-results.xml --cov=backend --cov-report=xml --cov-report=html
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        with:
+          name: pytest-results
+          path: ${{ env.project-working-directory }}/junit/test-results.xml
